@@ -3,6 +3,7 @@ const puppeteer = require('puppeteer');
 const dotenv = require('dotenv');
 const bodyParser = require('body-parser');
 const fetch = require('node-fetch');
+const { spawn } = require('child_process');
 
 // setup
 const app = express();
@@ -137,51 +138,153 @@ async function loginToInstagram(page) {
 async function extractMediaContent(page, isReel) {
     try {
         if (isReel) {
+
             console.log("Loading reel...");
             await page.setRequestInterception(true);
+            let videoChunks = new Map();
+            let videoUrl = null;
+            let audioUrl = null;
 
-            // Store video URLs we find
-            let videoUrls = [];
-
-            // Listen for requests
             page.on('request', request => {
-                // Log and store video requests
-                if (request.resourceType() === 'media') {
-                    console.log('Found video URL:', request.url());
-                    videoUrls.push(request.url());
+                const url = request.url();
+                if (url.includes('.mp4')) {
+                    // Parse byte range from URL
+                    const byteMatch = url.match(/bytestart=(\d+)&byteend=(\d+)/)
+                    const efgMatch = url.match(/efg=([^&]+)/);
+                    if (byteMatch && efgMatch) {
+                        const [_, start, end] = byteMatch;
+                        const efg = decodeURIComponent(efgMatch[1]);
+                        const decoded = JSON.parse(atob(efg));
+                        console.log('DEBUG: ', decoded);
+                        console.log('Found URL with stream type: ', decoded.vencode_tag);
+
+                        if (decoded.vencode_tag.includes('_audio')) {
+                            console.log('Found audio stream: ', url)
+                            audioUrl = url.split('&bytestart=')[0];
+
+                        } else {
+                            console.log('Found video url: ', url);
+                            videoUrl = url.split('&bytestart=')[0];
+                        }
+
+                        // console.log(`Found video chunk: bytes ${start}-${end}`);
+                        // videoUrl = url.split('&bytestart=')[0];
+                        // videoChunks.set(parseInt(start), {
+                        //     start: parseInt(start),
+                        //     end: parseInt(end),
+                        //     url: url
+                        // });
+                    }
                 }
                 request.continue();
             });
 
             await page.waitForSelector('video', { timeout: 60000 });
-            await new Promise(r => setTimeout(r, 2000));  // Wait for requests to be captured
+            // wait enough time for all requests to come in.
+            await new Promise(r => setTimeout(r, 2000));
 
-            if (videoUrls.length === 0) {
-                throw new Error('No video URLs found');
+            // if (videoChunks.size = 0) {
+            //     throw new Error('No video chunks found');
+            // }
+
+            if (!videoUrl && !audioUrl) {
+                throw new Error(`Missing either video or audio URL. Video URL: ${videoUrl}. Audio URL: ${audioUrl}`);
             }
+            
+            // console.log(`Found ${videoChunks.size} video chunks...`);
 
-            // Get the first video URL (usually the main content)
-            const videoUrl = videoUrls[0];
-            console.log('Using video URL:', videoUrl);
-
-            // Now fetch the video using node-fetch
-            const response = await fetch(videoUrl, {
+            console.log("Downloading video...");
+            const videoUrlDownload = videoUrl + "&bytestart=0";
+            const videoResponse = await fetch(videoUrlDownload, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
                     'Referer': 'https://www.instagram.com/'
                 }
             });
 
-            if (!response.ok) {
-                throw new Error(`Failed to fetch video: ${response.status} ${response.statusText}`);
-            }
+            const video = await videoResponse.buffer();
+            console.log("Downloaded video");
 
-            const buffer = await response.buffer();
+            console.log("Downloading audio...")
+            const audioUrlDownload = videoUrl + "&bytestart=0";
+            const audioResponse = await fetch(audioUrlDownload, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
+                    'Referer': 'https://www.instagram.com/'
+                }
+            });
+            const audio = await audioResponse.buffer();
+            console.log("Downloaded audio");
+
+            // const sortedChunks = Array.from(videoChunks.values())
+            //     .sort((a, b) => a.start - b.start);
+
+            // let completeVideo = Buffer.alloc(0);
+            // for (const chunk of sortedChunks) {
+            //     console.log(`Downloading chunk ${chunk.start}-${chunk.end}`);
+            //     const response = await fetch(chunk.url, {
+            //         headers: {
+            //             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
+            //             'Referer': 'https://www.instagram.com/'
+            //         }
+            //     });
+            //     const buffer = await response.buffer();
+            //     completeVideo = Buffer.concat([completeVideo, buffer]);
+            // }
+
             return {
                 type: 'video',
-                data: buffer,
+                data: video,
                 contentType: 'video/mp4'
             };
+
+
+            //// TRIAL 3
+            // console.log("Loading reel...");
+            // await page.setRequestInterception(true);
+
+            // // Store video URLs we find
+            // let videoUrls = [];
+
+            // // Listen for requests
+            // page.on('request', request => {
+            //     // Log and store video requests
+            //     if (request.resourceType() === 'media') {
+            //         console.log('Found video URL:', request.url());
+            //         videoUrls.push(request.url());
+            //     }
+            //     request.continue();
+            // });
+
+            // await page.waitForSelector('video', { timeout: 60000 });
+            // await new Promise(r => setTimeout(r, 2000));  // Wait for requests to be captured
+
+            // if (videoUrls.length === 0) {
+            //     throw new Error('No video URLs found');
+            // }
+
+            // // Get the first video URL (usually the main content)
+            // const videoUrl = videoUrls[0];
+            // console.log('Using video URL:', videoUrl);
+
+            // // Now fetch the video using node-fetch
+            // const response = await fetch(videoUrl, {
+            //     headers: {
+            //         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
+            //         'Referer': 'https://www.instagram.com/'
+            //     }
+            // });
+
+            // if (!response.ok) {
+            //     throw new Error(`Failed to fetch video: ${response.status} ${response.statusText}`);
+            // }
+
+            // const buffer = await response.buffer();
+            // return {
+            //     type: 'video',
+            //     data: buffer,
+            //     contentType: 'video/mp4'
+            // };
 
             // // TRIAL 2
             // console.log("Loading reel...");
