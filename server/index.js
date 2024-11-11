@@ -138,58 +138,106 @@ async function extractMediaContent(page, isReel) {
     try {
         if (isReel) {
             console.log("Loading reel...");
+            await page.setRequestInterception(true);
 
-            // wait for video element to appear
-            await page.waitForSelector('video');
+            // Store video URLs we find
+            let videoUrls = [];
 
-            // get video data directly from the page
-            const videoBuffer = await page.evaluate(async () => {
-                const videoElement = document.querySelector('video');
-                const blobUrl = videoElement.src;
+            // Listen for requests
+            page.on('request', request => {
+                // Log and store video requests
+                if (request.resourceType() === 'media') {
+                    console.log('Found video URL:', request.url());
+                    videoUrls.push(request.url());
+                }
+                request.continue();
+            });
 
-                // fetch the blob URL within the page context
-                const response = await fetch(blobUrl);
-                const blob = await response.blob();
+            await page.waitForSelector('video', { timeout: 60000 });
+            await new Promise(r => setTimeout(r, 2000));  // Wait for requests to be captured
 
-                // Convert blob to base64
-                return new Promise((resolve) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => resolve(reader.result);
-                    reader.readAsDataURL(blob);
-                });
-            })
+            if (videoUrls.length === 0) {
+                throw new Error('No video URLs found');
+            }
 
-            // Convert base64 back to buffer
-            const base64Data = videoBuffer.split(',')[1];
-            const buffer = Buffer.from(base64Data, 'base64');
+            // Get the first video URL (usually the main content)
+            const videoUrl = videoUrls[0];
+            console.log('Using video URL:', videoUrl);
 
+            // Now fetch the video using node-fetch
+            const response = await fetch(videoUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
+                    'Referer': 'https://www.instagram.com/'
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`Failed to fetch video: ${response.status} ${response.statusText}`);
+            }
+
+            const buffer = await response.buffer();
             return {
                 type: 'video',
                 data: buffer,
                 contentType: 'video/mp4'
             };
 
-            // get video URL
-            const videoUrl = await page.evaluate(() => {
-                const videoElement = document.querySelector('video');
-                const sourceElement = videoElement.querySelector('source') || videoElement;
-                return sourceElement.src || videoElement.src;
-            });
+            // // TRIAL 2
+            // console.log("Loading reel...");
 
-            if (videoUrl) {
-                console.log("Found video URL:", videoUrl);
-                console.log("Downloading...");
+            // // wait for video element to appear
+            // await page.waitForSelector('video');
+
+            // // get video data directly from the page
+            // const videoBuffer = await page.evaluate(async () => {
+            //     const videoElement = document.querySelector('video');
+            //     const blobUrl = videoElement.src;
+
+            //     // fetch the blob URL within the page context
+            //     const response = await fetch(blobUrl);
+            //     const blob = await response.blob();
+
+            //     // Convert blob to base64
+            //     return new Promise((resolve) => {
+            //         const reader = new FileReader();
+            //         reader.onloadend = () => resolve(reader.result);
+            //         reader.readAsDataURL(blob);
+            //     });
+            // })
+
+            // // Convert base64 back to buffer
+            // const base64Data = videoBuffer.split(',')[1];
+            // const buffer = Buffer.from(base64Data, 'base64');
+
+            // return {
+            //     type: 'video',
+            //     data: buffer,
+            //     contentType: 'video/mp4'
+            // };
+
+            // // TRIAL 1
+            // // get video URL
+            // const videoUrl = await page.evaluate(() => {
+            //     const videoElement = document.querySelector('video');
+            //     const sourceElement = videoElement.querySelector('source') || videoElement;
+            //     return sourceElement.src || videoElement.src;
+            // });
+
+            // if (videoUrl) {
+            //     console.log("Found video URL:", videoUrl);
+            //     console.log("Downloading...");
                 
-                // Download video using node-fetch
-                const response = await fetch(videoUrl);
-                const buffer = await response.buffer();
+            //     // Download video using node-fetch
+            //     const response = await fetch(videoUrl);
+            //     const buffer = await response.buffer();
                 
-                return {
-                    type: 'video',
-                    data: buffer,
-                    contentType: 'video/mp4'
-                };
-            }
+            //     return {
+            //         type: 'video',
+            //         data: buffer,
+            //         contentType: 'video/mp4'
+            //     };
+            // }
         } else {
             console.log("Loading post...")
             await Promise.all([
