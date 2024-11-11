@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const bodyParser = require('body-parser');
 const fetch = require('node-fetch');
 const { spawn } = require('child_process');
+const fs = require('fs').promises;
 
 // setup
 const app = express();
@@ -155,16 +156,17 @@ async function extractMediaContent(page, isReel) {
                         const [_, start, end] = byteMatch;
                         const efg = decodeURIComponent(efgMatch[1]);
                         const decoded = JSON.parse(atob(efg));
-                        console.log('DEBUG: ', decoded);
-                        console.log('Found URL with stream type: ', decoded.vencode_tag);
 
                         if (decoded.vencode_tag.includes('_audio')) {
-                            console.log('Found audio stream: ', url)
-                            audioUrl = url.split('&bytestart=')[0];
-
+                            if (!audioUrl) {
+                                console.log('Found audio stream: ', url)
+                                audioUrl = url.split('&bytestart=')[0];
+                            }
                         } else {
-                            console.log('Found video url: ', url);
-                            videoUrl = url.split('&bytestart=')[0];
+                            if (!videoUrl) {
+                                console.log('Found video url: ', url);
+                                videoUrl = url.split('&bytestart=')[0];
+                            }
                         }
 
                         // console.log(`Found video chunk: bytes ${start}-${end}`);
@@ -202,19 +204,67 @@ async function extractMediaContent(page, isReel) {
                 }
             });
 
-            const video = await videoResponse.buffer();
+            const videoBuffer = await videoResponse.buffer();
             console.log("Downloaded video");
 
             console.log("Downloading audio...")
-            const audioUrlDownload = videoUrl + "&bytestart=0";
+            const audioUrlDownload = audioUrl + "&bytestart=0";
             const audioResponse = await fetch(audioUrlDownload, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
                     'Referer': 'https://www.instagram.com/'
                 }
             });
-            const audio = await audioResponse.buffer();
+            const audioBuffer = await audioResponse.buffer();
             console.log("Downloaded audio");
+
+            console.log("Combining audio and video...");
+            // save temporarily
+            await fs.writeFile('temp_video.mp4', videoBuffer);
+            await fs.writeFile('temp_audio.mp4', audioBuffer); 
+
+            const video = await new Promise((resolve, reject) => {
+                const ffmpeg = spawn('ffmpeg', [
+                    '-i', 'temp_video.mp4',
+                    '-i', 'temp_audio.mp4',
+                    '-c:v', 'copy',
+                    '-c:a', 'copy',
+                    'output.mp4'
+                ]);
+            
+                // Handle stdout data
+                ffmpeg.stdout.on('data', (data) => {
+                    console.log(`ffmpeg stdout: ${data}`);
+                });
+
+                // Handle stderr data (ffmpeg uses this for progress info too)
+                ffmpeg.stderr.on('data', (data) => {
+                    console.log(`ffmpeg stderr: ${data}`);
+                });
+
+                // Handle successful completion
+                ffmpeg.on('close', (code) => {
+                    if (code === 0) {
+                        console.log('FFmpeg process completed successfully');
+                        resolve();
+                    } else {
+                        reject(new Error(`FFmpeg process exited with code ${code}`));
+                    }
+                });
+
+                // Handle errors
+                ffmpeg.on('error', (err) => {
+                    console.error('Failed to start FFmpeg process:', err);
+                    reject(err);
+                });
+            });
+
+            console.log("Done combining video.")
+            const finalVideo = await fs.readFile('output.mp4');
+            await fs.unlink('temp_video.mp4');
+            await fs.unlink('temp_audio.mp4');
+            await fs.unlink('output.mp4');
+
 
             // const sortedChunks = Array.from(videoChunks.values())
             //     .sort((a, b) => a.start - b.start);
@@ -234,7 +284,7 @@ async function extractMediaContent(page, isReel) {
 
             return {
                 type: 'video',
-                data: video,
+                data: finalVideo,
                 contentType: 'video/mp4'
             };
 
