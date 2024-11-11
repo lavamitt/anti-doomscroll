@@ -1,0 +1,190 @@
+const express = require('express');
+const puppeteer = require('puppeteer');
+const dotenv = require('dotenv');
+const bodyParser = require('body-parser');
+const fetch = require('node-fetch');
+
+// setup
+const app = express();
+const PORT = 3000;
+
+dotenv.config();
+app.use(bodyParser.json());
+
+let browserInstance = null;
+let isLoggedIn = false;
+
+app.listen(PORT, (error) =>{
+    if(!error)
+        console.log("Server is successfully running, and app is listening on port: "+ PORT)
+    else 
+        console.log("Error occurred, server can't start", error);
+    }
+);
+
+app.post('/api/content', async (req, res) => {
+    const { url } = req.body;
+    
+    if (!url.includes('instagram.com')) {
+        return res.status(400).json({ error: 'Invalid Instagram URL' });
+    }
+
+    const isReel = url.includes('/reel/');
+    console.log(`Content type: ${isReel? 'Reel' : 'Post'}`);
+
+    try {
+        const browserInstance = await initBrowser();
+        const page = await browserInstance.newPage();
+        await loginToInstagram(page);
+
+        console.log("Loading URL: " + url);
+        await page.goto(url);
+
+        // Wait for navigation after going to URL
+        await Promise.all([
+            page.goto(url),
+            page.waitForSelector('body', { visible: true })
+        ]);
+
+        console.log("Waiting for content...");
+
+
+        // console.log("Waiting for content to load");
+        // await page.waitForSelector('article');  // Instagram posts are in <article> tags
+
+        // Add a small delay to let content load
+        // await new Promise(r => setTimeout(r, 10000));
+
+        // Let's see what selectors are available
+        // const content = await page.content();
+        // console.log("Page content:", content);
+
+        // Try waiting for any visible content
+        // await page.waitForSelector('img', { visible: true }); // Wait for any image to load
+
+        // Log current URL and title
+        console.log("Current URL:", await page.url());
+        console.log("Page title:", await page.title());
+
+        const content = await extractMediaContent(page, isReel);
+
+        console.log("Sending media")
+        res.writeHead(200, {
+            'Content-Type': content.contentType,
+            'Content-Length': content.data.length
+        });
+        res.end(content.data);
+
+        console.log("Done!");
+
+        await page.close();
+    } catch (error) {
+        console.error('Screenshot error:', error);
+        res.status(500).json({ error: 'Failed to capture content' });
+    }
+});
+
+async function initBrowser() {
+    if (!browserInstance) {
+        try {
+            console.log("Launching new browser instance")
+            browserInstance = await puppeteer.launch({
+                headless: true,
+                args: ['--no-sandbox']
+            });
+        } catch (e) {
+            console.error("Failed to launch browser instance, saw error: " + e.message);
+        }
+        
+    }
+
+    return browserInstance;
+}
+
+async function loginToInstagram(page) {
+    if (isLoggedIn) {
+        console.log("Already logged into instagram")
+        return;
+    }
+
+    console.log("Logging into instagram");
+
+    await page.goto('https://www.instagram.com/accounts/login/');  
+    await page.waitForSelector('input[name="username"]');
+
+    await page.type('input[name="username"]', process.env.INSTAGRAM_USERNAME);
+    await page.type('input[name="password"]', process.env.INSTAGRAM_PASSWORD);
+
+    await page.click('button[type="submit"]');
+
+    await page.waitForNavigation(); // Wait for redirect after login
+    const currentUrl = page.url();
+    if (currentUrl.includes('instagram.com/accounts/login')) {
+        // Still on login page = probably failed
+        throw new Error('Login failed - still on login page');
+    }
+
+    try {
+        // Wait for an element that appears on successful login
+        await page.waitForSelector('svg[aria-label="Home"]', { timeout: 5000 });
+        console.log('Login successful - found home icon');
+        isLoggedIn = true;
+    } catch (e) {
+        throw new Error('Login failed - could not find home icon');
+    }
+}
+
+async function extractMediaContent(page, isReel) {
+    try {
+        if (isReel) {
+            console.log("Loading reel...");
+
+            // wait for video element to appear
+            await page.waitForSelector('video');
+
+            // get video URL
+            const videoUrl = await page.evaluate(() => {
+                const videoElement = document.querySelector('video');
+                const sourceElement = videoElement.querySelector('source') || videoElement;
+                return sourceElement.src || videoElement.src;
+            });
+
+            if (videoUrl) {
+                console.log("Found video URL:", videoUrl);
+                console.log("Downloading...");
+                
+                // Download video using node-fetch
+                const response = await fetch(videoUrl);
+                const buffer = await response.buffer();
+                
+                return {
+                    type: 'video',
+                    data: buffer,
+                    contentType: 'video/mp4'
+                };
+            }
+        } else {
+            console.log("Loading post...")
+            await Promise.all([
+                // let's wait for the time data to show up
+                page.waitForSelector('time'),
+                page.waitForSelector('img[src]:not([src=""])', { timeout: 60000 }),
+            ]);
+
+            console.log("Taking screenshot...");
+            const screenshot = await page.screenshot({
+                type: 'png',
+                fullPage: true
+            });
+
+            return {
+                type: 'image',
+                data: screenshot,
+                contentType: 'image/png'
+            }
+        }
+    } catch (e) {
+        console.log(`Error loading/downloading content: ${e.message}`)
+        throw e;
+    }
+}
