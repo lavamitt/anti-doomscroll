@@ -50,20 +50,6 @@ app.post('/api/content', async (req, res) => {
 
         console.log("Waiting for content...");
 
-
-        // console.log("Waiting for content to load");
-        // await page.waitForSelector('article');  // Instagram posts are in <article> tags
-
-        // Add a small delay to let content load
-        // await new Promise(r => setTimeout(r, 10000));
-
-        // Let's see what selectors are available
-        // const content = await page.content();
-        // console.log("Page content:", content);
-
-        // Try waiting for any visible content
-        // await page.waitForSelector('img', { visible: true }); // Wait for any image to load
-
         // Log current URL and title
         console.log("Current URL:", await page.url());
         console.log("Page title:", await page.title());
@@ -142,7 +128,6 @@ async function extractMediaContent(page, isReel) {
 
             console.log("Loading reel...");
             await page.setRequestInterception(true);
-            let videoChunks = new Map();
             let videoUrl = null;
             let audioUrl = null;
 
@@ -153,7 +138,6 @@ async function extractMediaContent(page, isReel) {
                     const byteMatch = url.match(/bytestart=(\d+)&byteend=(\d+)/)
                     const efgMatch = url.match(/efg=([^&]+)/);
                     if (byteMatch && efgMatch) {
-                        const [_, start, end] = byteMatch;
                         const efg = decodeURIComponent(efgMatch[1]);
                         const decoded = JSON.parse(atob(efg));
 
@@ -168,14 +152,6 @@ async function extractMediaContent(page, isReel) {
                                 videoUrl = url.split('&bytestart=')[0];
                             }
                         }
-
-                        // console.log(`Found video chunk: bytes ${start}-${end}`);
-                        // videoUrl = url.split('&bytestart=')[0];
-                        // videoChunks.set(parseInt(start), {
-                        //     start: parseInt(start),
-                        //     end: parseInt(end),
-                        //     url: url
-                        // });
                     }
                 }
                 request.continue();
@@ -185,15 +161,9 @@ async function extractMediaContent(page, isReel) {
             // wait enough time for all requests to come in.
             await new Promise(r => setTimeout(r, 2000));
 
-            // if (videoChunks.size = 0) {
-            //     throw new Error('No video chunks found');
-            // }
-
             if (!videoUrl && !audioUrl) {
                 throw new Error(`Missing either video or audio URL. Video URL: ${videoUrl}. Audio URL: ${audioUrl}`);
             }
-            
-            // console.log(`Found ${videoChunks.size} video chunks...`);
 
             console.log("Downloading video...");
             const videoUrlDownload = videoUrl + "&bytestart=0";
@@ -223,7 +193,7 @@ async function extractMediaContent(page, isReel) {
             await fs.writeFile('temp_video.mp4', videoBuffer);
             await fs.writeFile('temp_audio.mp4', audioBuffer); 
 
-            const video = await new Promise((resolve, reject) => {
+            await new Promise((resolve, reject) => {
                 const ffmpeg = spawn('ffmpeg', [
                     '-i', 'temp_video.mp4',
                     '-i', 'temp_audio.mp4',
@@ -264,23 +234,6 @@ async function extractMediaContent(page, isReel) {
             await fs.unlink('temp_video.mp4');
             await fs.unlink('temp_audio.mp4');
             await fs.unlink('output.mp4');
-
-
-            // const sortedChunks = Array.from(videoChunks.values())
-            //     .sort((a, b) => a.start - b.start);
-
-            // let completeVideo = Buffer.alloc(0);
-            // for (const chunk of sortedChunks) {
-            //     console.log(`Downloading chunk ${chunk.start}-${chunk.end}`);
-            //     const response = await fetch(chunk.url, {
-            //         headers: {
-            //             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
-            //             'Referer': 'https://www.instagram.com/'
-            //         }
-            //     });
-            //     const buffer = await response.buffer();
-            //     completeVideo = Buffer.concat([completeVideo, buffer]);
-            // }
 
             return {
                 type: 'video',
