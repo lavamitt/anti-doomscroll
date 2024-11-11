@@ -142,6 +142,33 @@ async function extractMediaContent(page, isReel) {
             // wait for video element to appear
             await page.waitForSelector('video');
 
+            // get video data directly from the page
+            const videoBuffer = await page.evaluate(async () => {
+                const videoElement = document.querySelector('video');
+                const blobUrl = videoElement.src;
+
+                // fetch the blob URL within the page context
+                const response = await fetch(blobUrl);
+                const blob = await response.blob();
+
+                // Convert blob to base64
+                return new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.readAsDataURL(blob);
+                });
+            })
+
+            // Convert base64 back to buffer
+            const base64Data = videoBuffer.split(',')[1];
+            const buffer = Buffer.from(base64Data, 'base64');
+
+            return {
+                type: 'video',
+                data: buffer,
+                contentType: 'video/mp4'
+            };
+
             // get video URL
             const videoUrl = await page.evaluate(() => {
                 const videoElement = document.querySelector('video');
