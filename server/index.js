@@ -32,7 +32,8 @@ app.post('/api/content', async (req, res) => {
     }
 
     const isReel = url.includes('/reel/');
-    console.log(`Content type: ${isReel? 'Reel' : 'Post'}`);
+    const isInbox = url.includes('/direct/');
+    console.log(`Content type: ${isReel? 'Reel' : isInbox? 'Inbox' : 'Post'}`);
 
     try {
         const browserInstance = await initBrowser();
@@ -54,7 +55,7 @@ app.post('/api/content', async (req, res) => {
         console.log("Current URL:", await page.url());
         console.log("Page title:", await page.title());
 
-        const content = await extractMediaContent(page, isReel);
+        const content = await extractMediaContent(page, isReel, isInbox);
 
         console.log("Sending media")
         res.writeHead(200, {
@@ -122,10 +123,9 @@ async function loginToInstagram(page) {
     }
 }
 
-async function extractMediaContent(page, isReel) {
+async function extractMediaContent(page, isReel, isInbox) {
     try {
         if (isReel) {
-
             console.log("Loading reel...");
             await page.setRequestInterception(true);
             let videoUrl = null;
@@ -240,10 +240,28 @@ async function extractMediaContent(page, isReel) {
                 data: finalVideo,
                 contentType: 'video/mp4'
             };
-        } else {
-            console.log("Loading post...")
+        } else if (isInbox) {
+            console.log("Loading inbox...");
             await Promise.all([
-                // let's wait for the time data to show up
+                // let's wait for data to show up
+                page.waitForSelector('[role="button"]')
+            ]);
+
+            console.log("Taking screenshot...");
+            const screenshot = await page.screenshot({
+                type: 'png',
+                fullPage: true
+            });
+
+            return {
+                type: 'image',
+                data: screenshot,
+                contentType: 'image/png'
+            }
+        } else {
+            console.log("Loading post...");
+            await Promise.all([
+                // let's wait for data to show up
                 page.waitForSelector('time'),
                 page.waitForSelector('img[src]:not([src=""])', { timeout: 60000 }),
             ]);
